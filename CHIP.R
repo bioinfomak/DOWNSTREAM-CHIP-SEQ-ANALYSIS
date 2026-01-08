@@ -1,4 +1,9 @@
 ############################################################
+## COMPLETE STAT3 ChIP-seq PROMOTER ANALYSIS
+## INPUT: BED FILE ONLY
+############################################################
+
+############################################################
 ## 0. Load libraries
 ############################################################
 suppressPackageStartupMessages({
@@ -12,164 +17,176 @@ suppressPackageStartupMessages({
   library(org.Hs.eg.db)
   library(AnnotationDbi)
   library(UpSetR)
+  library(clusterProfiler)
+  library(org.Hs.eg.db)
+  library(AnnotationDbi)  # for mapIds etc.
+  library(ggplot2)        # for plotting (dotplot uses ggplot2)
 })
-
 ############################################################
 ## 1. Set paths
 ############################################################
-setwd("C:")
-
-peak_gff_file <- "STAT3_chipseq_peaks.gff3"
-bed_file      <- "STAT3_chipseq_summits.bed"
-
+setwd("C:/Users/S Sarkar/Desktop/Srija MKG/STAT3_Chipseq_NEW")
+bed_file <- "STAT3_chipseq_summits.bed"
 ############################################################
-## 2. Import peaks
+## 2. Import BED peaks
 ############################################################
-peak_gr1 <- import(peak_gff_file)
-peak_gr2 <- toGRanges(bed_file, format = "BED", header = FALSE)
-
+peaks_gr1 <- toGRanges(bed_file, format = "BED", header = FALSE)
+cat("Total peaks:", length(peaks_gr1), "\n")
 ############################################################
-## 3. Merge overlapping peaks
+## 3. Gene annotation (EnsDb v86)
 ############################################################
-overlaps_peak <- findOverlapsOfPeaks(peak_gr1, peak_gr2)
-overlaps_peak <- addMetadata(overlaps_peak, colNames = "score", FUN = mean)
-
-merged_peaks <- overlaps_peak$mergedPeaks
-merged_peaks <- keepStandardChromosomes(merged_peaks, pruning.mode = "coarse")
-seqlevelsStyle(merged_peaks) <- "UCSC"
-
-cat("Merged peaks:", length(merged_peaks), "\n")
-
+ensdb1 <- EnsDb.Hsapiens.v86
+ensembl_genes1 <- toGRanges(ensdb1, feature = "gene")
+ensembl_genes1 <- keepStandardChromosomes(ensembl_genes1, pruning.mode = "coarse")
+suppressWarnings(seqlevelsStyle(ensembl_genes1) <- "UCSC")
 ############################################################
-## 4. Gene annotation (EnsDb v86)
+## 4. Annotate peaks to nearest TSS
 ############################################################
-ensdb <- EnsDb.Hsapiens.v86
-
-ensembl_genes <- toGRanges(ensdb, feature = "gene")
-ensembl_genes <- keepStandardChromosomes(ensembl_genes, pruning.mode = "coarse")
-seqlevelsStyle(ensembl_genes) <- "UCSC"
-
-############################################################
-## 5. Annotate peaks to nearest TSS
-############################################################
-peak_anno <- annotatePeakInBatch(
-  merged_peaks,
-  AnnotationData = ensembl_genes,
+peak_anno1 <- annotatePeakInBatch(
+  peaks_gr1,
+  AnnotationData = ensembl_genes1,
   output = "nearestLocation",
   FeatureLocForDistance = "TSS"
 )
+peak_anno_df1 <- as.data.frame(peak_anno1)
 
-peak_anno_df <- as.data.frame(peak_anno)
-
-############################################################
-## 6. Map gene symbols (ENSEMBL → SYMBOL)
-############################################################
-gene_ids <- unique(na.omit(peak_anno_df$feature))
-
-gene_symbols <- mapIds(
+# Map gene symbols (may return list-column)
+peak_anno_df1$gene_symbol <- mapIds(
   org.Hs.eg.db,
-  keys = gene_ids,
+  keys = peak_anno_df1$feature,
   keytype = "ENSEMBL",
   column = "SYMBOL",
   multiVals = "first"
 )
+# 'select()' returned 1:many mapping warning is normal if some keys map multiple symbols
 
-peak_anno_df$gene_name <-
-  gene_symbols[match(peak_anno_df$feature, names(gene_symbols))]
+# --- FIX: Flatten gene_symbol list-column to character vector ---
+peak_anno_df1$gene_symbol <- sapply(peak_anno_df1$gene_symbol, function(x) {
+  if (length(x) == 0) return(NA_character_)  # handle empty lists
+  else return(as.character(x[1]))
+})
 
+# Write to CSV now that gene_symbol column is flattened
+write.csv(peak_anno_df1, "STAT3_peak_annotation_from_BED.csv", row.names = FALSE)
 ############################################################
-## 7. Final peak annotation table
+## 5. Promoter definition (-2 kb / +1 kb)
 ############################################################
-peak_anno_df$peakNames <-
-  sapply(peak_anno_df$peakNames, paste, collapse = ";")
+txdb1 <- TxDb.Hsapiens.UCSC.hg38.knownGene
 
-peak_anno_df_final <- peak_anno_df %>%
-  dplyr::select(
-    seqnames, start, end, peakNames,
-    feature, gene_name,
-    distancetoFeature, shortestDistance,
-    insideFeature, fromOverlappingOrNearest
-  )
+genes_gr1 <- genes(txdb1, single.strand.genes.only = FALSE)
+genes_gr1 <- unlist(genes_gr1)
+genes_gr1 <- keepStandardChromosomes(genes_gr1, pruning.mode = "coarse")
+suppressWarnings(seqlevelsStyle(genes_gr1) <- "UCSC")
 
-write.csv(peak_anno_df_final,
-          "STAT3_peak_annotation_nearest_TSS.csv",
-          row.names = FALSE)
-
-############################################################
-## 8. Promoter analysis (-2 kb / +1 kb)
-############################################################
-txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
-
-genes_gr <- genes(txdb, single.strand.genes.only = FALSE)
-genes_gr <- unlist(genes_gr)
-genes_gr <- keepStandardChromosomes(genes_gr, pruning.mode = "coarse")
-seqlevelsStyle(genes_gr) <- "UCSC"
-
-promoters_gr <- promoters(
-  genes_gr,
+promoters_gr1 <- promoters(
+  genes_gr1,
   upstream = 2000,
   downstream = 1000
 )
 
-ov_prom <- findOverlaps(merged_peaks, promoters_gr)
+############################################################
+## 6. Overlap peaks with promoters
+############################################################
+ov_prom1 <- findOverlaps(peaks_gr1, promoters_gr1)
 
-promoter_peaks <- merged_peaks[queryHits(ov_prom)]
-promoter_genes <- promoters_gr[subjectHits(ov_prom)]
+promoter_peaks1 <- peaks_gr1[queryHits(ov_prom1)]
+promoter_genes1 <- promoters_gr1[subjectHits(ov_prom1)]
 
 ############################################################
-## 9. Distance to TSS
+## 7. Distance to TSS (strand-aware)
 ############################################################
-gene_strand <- as.character(strand(promoter_genes))
-gene_strand[gene_strand == "*"] <- "+"
+gene_strand1 <- as.character(strand(promoter_genes1))
+gene_strand1[gene_strand1 == "*"] <- "+"
 
-gene_tss <- ifelse(
-  gene_strand == "+",
-  start(promoter_genes),
-  end(promoter_genes)
+gene_TSS1 <- ifelse(
+  gene_strand1 == "+",
+  start(promoter_genes1),
+  end(promoter_genes1)
 )
 
-peak_center <- start(promoter_peaks) + width(promoter_peaks) %/% 2
-distance_to_TSS <- peak_center - gene_tss
+peak_center1 <- start(promoter_peaks1) + width(promoter_peaks1) %/% 2
+distance_to_TSS1 <- peak_center1 - gene_TSS1
 
 ############################################################
-## 10. Promoter dataframe
+## 8. Promoter dataframe (PEAK + PROMOTER + GENE ID)
 ############################################################
-promoter_df <- data.frame(
-  chr = as.character(seqnames(promoter_genes)),
-  gene_id = names(promoter_genes),   # ENTREZID
-  distance_to_TSS = distance_to_TSS,
+promoter_df1 <- data.frame(
+  peak_id         = names(promoter_peaks1),
+  peak_chr        = as.character(seqnames(promoter_peaks1)),
+  peak_start      = start(promoter_peaks1),
+  peak_end        = end(promoter_peaks1),
+  
+  promoter_chr    = as.character(seqnames(promoter_genes1)),
+  promoter_start  = start(promoter_genes1),
+  promoter_end    = end(promoter_genes1),
+  
+  gene_id         = names(promoter_genes1),  # ENTREZID
+  gene_strand     = gene_strand1,
+  gene_TSS        = gene_TSS1,
+  distance_to_TSS = distance_to_TSS1,
+  
   stringsAsFactors = FALSE
 )
 
-promoter_df$symbol <- mapIds(
+############################################################
+## 9. TRUE gene body coordinates (TxDb)
+############################################################
+############################################################
+## 9. TRUE gene body coordinates (TxDb) — TxDb-SAFE
+############################################################
+
+gene_body_gr <- genes(txdb1, single.strand.genes.only = FALSE)
+gene_body_gr <- unlist(gene_body_gr)
+
+## Extract ENTREZ IDs from names()
+gene_body_df1 <- data.frame(
+  gene_id = names(gene_body_gr),
+  gene_body_chr   = as.character(seqnames(gene_body_gr)),
+  gene_body_start = start(gene_body_gr),
+  gene_body_end   = end(gene_body_gr),
+  stringsAsFactors = FALSE
+) %>%
+  dplyr::distinct(gene_id, .keep_all = TRUE)
+
+
+promoter_df1 <- promoter_df1 %>%
+  dplyr::left_join(
+    gene_body_df1,
+    by = "gene_id"
+  )
+
+############################################################
+## 10. Gene symbol + Ensembl ID mapping
+############################################################
+promoter_df1$symbol <- mapIds(
   org.Hs.eg.db,
-  keys = promoter_df$gene_id,
+  keys = promoter_df1$gene_id,
   keytype = "ENTREZID",
   column = "SYMBOL",
   multiVals = "first"
 )
 
-promoter_df$ensembl_gene_id <- mapIds(
+promoter_df1$ensembl_gene_id <- mapIds(
   org.Hs.eg.db,
-  keys = promoter_df$gene_id,
+  keys = promoter_df1$gene_id,
   keytype = "ENTREZID",
   column = "ENSEMBL",
   multiVals = "first"
 )
 
 ############################################################
-## 11. Protein-coding filter (EnsDb)
+## 11. Protein-coding gene filter (EnsDb)
 ############################################################
-gene_info <- genes(
-  ensdb,
+gene_info1 <- genes(
+  ensdb1,
   columns = c("gene_id", "gene_biotype")
-) |> 
-  as.data.frame() |> 
+) %>%
+  as.data.frame() %>%
   dplyr::distinct(gene_id, .keep_all = TRUE)
 
-promoter_df_pc <- promoter_df %>%
+promoter_df_pc1 <- promoter_df1 %>%
   dplyr::left_join(
-    gene_info,
+    gene_info1,
     by = c("ensembl_gene_id" = "gene_id")
   ) %>%
   dplyr::filter(gene_biotype == "protein_coding") %>%
@@ -177,73 +194,73 @@ promoter_df_pc <- promoter_df %>%
   dplyr::filter(!grepl("^LOC", symbol))
 
 ############################################################
-## 12. Save promoter results
+## 12. Save results
 ############################################################
-write.csv(promoter_df,
-          "STAT3_promoter_peaks_ALL.csv",
-          row.names = FALSE)
+write.csv(
+  promoter_df1,
+  "STAT3_promoter_peaks_ALL_from1_BED.csv",
+  row.names = FALSE
+)
 
-write.csv(promoter_df_pc,
-          "STAT3_promoter_peaks_PROTEIN_CODING.csv",
-          row.names = FALSE)
+write.csv(
+  promoter_df_pc1,
+  "STAT3_promoter_peaks_PROTEIN_CODING1_from_BED.csv",
+  row.names = FALSE
+)
 
 ############################################################
 ## 13. Genomic element UpSet plot
 ############################################################
-res <- genomicElementUpSetR(
-  merged_peaks,
+res1 <- genomicElementUpSetR(
+  peaks_gr1,
   TxDb.Hsapiens.UCSC.hg38.knownGene
 )
 
-upset(res$plotData,
-      nsets = ncol(res$plotData),
-      nintersects = NA)
+upset(
+  res1$plotData,
+  nsets = ncol(res1$plotData),
+  nintersects = NA
+)
 
 ############################################################
-## 14. Final summary
+## 14. Peak distribution relative to TSS
 ############################################################
-cat("\n===== FINAL SUMMARY =====\n")
-cat("Total merged peaks: ", length(merged_peaks), "\n")
-cat("Promoter-overlapping peaks: ", nrow(promoter_df), "\n")
-cat("Unique promoter genes (all): ",
-    length(unique(promoter_df$symbol)), "\n")
-cat("Protein-coding promoter genes: ",
-    length(unique(promoter_df_pc$symbol)), "\n")
-############################################################
-## 15. Peak distribution relative to TSS
-############################################################
-
-# binOverFeature requires a score column; set score = 1 if missing
-if (is.null(mcols(merged_peaks)$score)) {
-  mcols(merged_peaks)$score <- 1
+if (is.null(mcols(peaks_gr1)$score)) {
+  mcols(peaks_gr1)$score <- 1
 }
 
 binOverFeature(
-  merged_peaks,
+  peaks_gr1,
   nbins = 20,
-  annotationData = ensembl_genes,
+  annotationData = ensembl_genes1,
   xlab = "Peak distance from TSS (bp)",
   ylab = "Peak count",
   main = "Distribution of STAT3 peaks around TSS"
 )
 
 ############################################################
-## 16. Peak distribution over genomic features (single sample)
+## 15. Genomic feature distribution
 ############################################################
+genomicElementDistribution(
+  peaks_gr1,
+  TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene
+)
+
+macs_peaks1 <- GRangesList(STAT3 = peaks_gr1)
 
 genomicElementDistribution(
-  merged_peaks,
+  macs_peaks1,
   TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene
 )
 
 ############################################################
-## 17. Peak distribution over genomic features (UpSet-ready)
+## 16. Final summary
 ############################################################
-
-macs_peaks <- GRangesList(STAT3 = merged_peaks)
-
-genomicElementDistribution(
-  macs_peaks,
-  TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene
-)
+cat("\n===== FINAL SUMMARY =====\n")
+cat("Total peaks: ", length(peaks_gr1), "\n")
+cat("Promoter-overlapping peaks: ", nrow(promoter_df1), "\n")
+cat("Unique promoter genes (all): ",
+    length(unique(promoter_df1$symbol)), "\n")
+cat("Protein-coding promoter genes: ",
+    length(unique(promoter_df_pc1$symbol)), "\n")
 
