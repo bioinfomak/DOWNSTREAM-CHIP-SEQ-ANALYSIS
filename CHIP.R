@@ -26,11 +26,11 @@ suppressPackageStartupMessages({
 ## 1. Set paths
 ############################################################
 setwd("C:/Users/S Sarkar/Desktop/Srija MKG/STAT3_Chipseq_NEW")
-bed_file <- "STAT3_chipseq_summits.bed"
+peak_file <- "STAT3_chipseq_summits.bed"
 ############################################################
 ## 2. Import BED peaks
 ############################################################
-peaks_gr1 <- toGRanges(bed_file, format = "BED", header = FALSE)
+peaks_gr1 <- toGRanges(peak_file, format = "BED", header = FALSE)
 cat("Total peaks:", length(peaks_gr1), "\n")
 ############################################################
 ## 3. Gene annotation (EnsDb v86)
