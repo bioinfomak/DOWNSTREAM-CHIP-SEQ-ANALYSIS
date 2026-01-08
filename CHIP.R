@@ -356,5 +356,19 @@ ego_mf <- enrichGO(
 sum(ego_bp@result$p.adjust < 0.4)  # see how many pass now
 
 dotplot(ego_bp, showCategory = 10)
+# Assuming your Entrez gene vector is:
+entrez_genes <- unique(gene_score2$ENTREZID)
 
+# KEGG enrichment analysis
+kegg_enrich_all <- enrichKEGG(
+  gene = entrez_genes,
+  organism = "hsa",
+  pvalueCutoff = 2,
+  qvalueCutoff = 2
+)
+head(kegg_enrich_all@result)
+sum(kegg_enrich_all@result$p.adjust < 2)  # see how many pass now
+
+# Plot top enriched KEGG pathways (dotplot or barplot)
+barplot(kegg_enrich_all, showCategory=10)
 
