@@ -20,17 +20,19 @@ suppressPackageStartupMessages({
   library(clusterProfiler)
   library(org.Hs.eg.db)
   library(AnnotationDbi)  # for mapIds etc.
-  library(ggplot2)        # for plotting (dotplot uses ggplot2)
+  library(ggplot2) 
+  library(ChIPseeker)# for plotting (dotplot uses ggplot2)
 })
 ############################################################
 ## 1. Set paths
 ############################################################
-setwd("C:/Users/S Sarkar/Desktop/Srija MKG/STAT3_Chipseq_NEW")
-peak_file <- "STAT3_chipseq_summits.bed"
+setwd("PATH")
+list.files()
+peak_file <- "STAT3_chipseq_peaks.narrowPeak"
 ############################################################
-## 2. Import BED peaks
+## 2. Import BED/NARROW_PEAKS peaks
 ############################################################
-peaks_gr1 <- toGRanges(peak_file, format = "BED", header = FALSE)
+peaks_gr1 <- toGRanges(peak_file, format = "narrowPeak", header = FALSE)
 cat("Total peaks:", length(peaks_gr1), "\n")
 ############################################################
 ## 3. Gene annotation (EnsDb v86)
@@ -67,7 +69,7 @@ peak_anno_df1$gene_symbol <- sapply(peak_anno_df1$gene_symbol, function(x) {
 })
 
 # Write to CSV now that gene_symbol column is flattened
-write.csv(peak_anno_df1, "STAT3_peak_annotation_from_BED.csv", row.names = FALSE)
+write.csv(peak_anno_df1, "STAT3_peak_annotation_from_NP.csv", row.names = FALSE)
 ############################################################
 ## 5. Promoter definition (-2 kb / +1 kb)
 ############################################################
@@ -198,13 +200,13 @@ promoter_df_pc1 <- promoter_df1 %>%
 ############################################################
 write.csv(
   promoter_df1,
-  "STAT3_promoter_peaks_ALL_from1_BED.csv",
+  "STAT3_promoter_peaks_ALL_from1_NP.csv",
   row.names = FALSE
 )
 
 write.csv(
   promoter_df_pc1,
-  "STAT3_promoter_peaks_PROTEIN_CODING1_from_BED.csv",
+  "STAT3_promoter_peaks_PROTEIN_CODING1_from_NP.csv",
   row.names = FALSE
 )
 
@@ -263,4 +265,96 @@ cat("Unique promoter genes (all): ",
     length(unique(promoter_df1$symbol)), "\n")
 cat("Protein-coding promoter genes: ",
     length(unique(promoter_df_pc1$symbol)), "\n")
+
+###########################################################
+#### GSEA Analysis
+###########################################################
+peaks <- readPeakFile("STAT3_chipseq_peaks.narrowPeak")
+
+peakAnno <- annotatePeak(
+  peaks,
+  TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene,
+  tssRegion = c(-3000, 3000),
+  annoDb = "org.Hs.eg.db"
+)
+
+peakAnno1 <- annotatePeak(
+  peaks,
+  TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene,
+  tssRegion = c(-2000, 1000),
+  annoDb = "org.Hs.eg.db"
+)
+
+gene_df <- as.data.frame(peakAnno1)
+
+gene_score <- gene_df %>%
+  filter(!is.na(ENSEMBL)) %>%
+  group_by(ENSEMBL) %>%
+  summarise(score = max(V7, na.rm = TRUE)) %>%
+  ungroup() %>%
+  arrange(desc(score))
+
+gene_ids <- bitr(
+  gene_score$ENSEMBL,
+  fromType = "ENSEMBL",
+  toType   = "ENTREZID",
+  OrgDb    = org.Hs.eg.db
+)
+
+
+gene_score2 <- inner_join(
+  gene_score,
+  gene_ids,
+  by = c("ENSEMBL" = "ENSEMBL")
+)
+
+gene_score2 <- gene_score2 %>%
+  group_by(ENTREZID) %>%
+  summarise(score = max(score)) %>%
+  ungroup()
+
+geneList <- gene_score2$score
+names(geneList) <- gene_score2$ENTREZID
+geneList <- sort(geneList, decreasing = TRUE)
+
+any(duplicated(names(geneList)))   # MUST be FALSE
+length(geneList)                   # ~300–800 is typical
+
+entrez_genes <- unique(gene_score2$ENTREZID)
+
+ego_bp <- enrichGO(
+  gene = entrez_genes,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.4,  # more lenient
+  qvalueCutoff = 0.4
+)
+
+ego_cc <- enrichGO(
+  gene = entrez_genes,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "CC",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.4,  # more lenient
+  qvalueCutoff = 0.4
+)
+
+
+ego_mf <- enrichGO(
+  gene = entrez_genes,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "MF",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.4,  # more lenient
+  qvalueCutoff = 0.4
+)
+
+sum(ego_bp@result$p.adjust < 0.4)  # see how many pass now
+
+dotplot(ego_bp, showCategory = 10)
+
 
