@@ -21,7 +21,8 @@ suppressPackageStartupMessages({
   library(org.Hs.eg.db)
   library(AnnotationDbi)  # for mapIds etc.
   library(ggplot2) 
-  library(ChIPseeker)# for plotting (dotplot uses ggplot2)
+  library(ChIPseeker)
+  library(ReactomePA)# for plotting (dotplot uses ggplot2)
 })
 ############################################################
 ## 1. Set paths
@@ -372,3 +373,6 @@ sum(kegg_enrich_all@result$p.adjust < 2)  # see how many pass now
 # Plot top enriched KEGG pathways (dotplot or barplot)
 barplot(kegg_enrich_all, showCategory=10)
 
+reactome_enrich <- enrichPathway(gene=entrez_genes, pvalueCutoff= 0.5, qvalueCutoff= 0.5, readable=TRUE)
+sum(reactome_enrich@result$p.adjust < 0.5)
+barplot(reactome_enrich, showCategory=10)
